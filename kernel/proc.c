@@ -124,6 +124,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->syscount = 0; // initialize syscall count to 0
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -169,6 +170,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->syscount = 0; // reset syscall count
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -364,9 +366,62 @@ kexit(int status)
   sched();
   panic("zombie exit");
 }
-
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
+
+//new
+int
+kgetppid(void)
+{
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+  struct proc *parent = p->parent;
+  release(&wait_lock);
+
+  if(parent) return parent->pid;
+  else return -1; 
+}
+
+int
+kgetnumchild(void)
+{
+  struct proc *pp = myproc();
+  struct proc *cp;
+  int num_child = 0;
+
+  acquire(&wait_lock);
+  for(cp = proc; cp < &proc[NPROC]; cp++){
+    if(cp->parent == pp){
+      num_child++;
+    }
+  }
+  release(&wait_lock);
+
+  return num_child;
+}
+
+int
+kgetchildsyscount(int pid)
+{
+  if(pid <= 0) return -1; // invalid pid
+  struct proc *pp = myproc();
+  struct proc *cp;
+  int syscount = -1;
+
+  acquire(&wait_lock);
+  for(cp = proc; cp < &proc[NPROC]; cp++){
+    if(cp->parent == pp && cp->pid == pid){
+      acquire(&cp->lock);
+      syscount = cp->syscount;
+      release(&cp->lock);
+    }
+  }
+  release(&wait_lock);
+
+  return syscount;
+}
+
 int
 kwait(uint64 addr)
 {

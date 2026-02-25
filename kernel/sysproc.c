@@ -107,3 +107,47 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+//new
+uint64
+sys_hello(void)
+{
+  printf("Hello from the kernel!\n");
+  return 0;
+}
+
+uint64
+sys_getpid2(void)
+{
+  return myproc()->pid;;
+}
+
+uint64
+sys_getppid(void)
+{
+  uint64 parent_pid = kgetppid();
+  return parent_pid;
+}
+
+uint64
+sys_getnumchild(void)
+{
+  uint64 num_child = kgetnumchild();
+  return num_child;
+}
+
+uint64
+sys_getsyscount(void)
+{
+  struct proc *p = myproc();
+  uint64 count = p->syscount;
+  return count;
+}
+
+uint64
+sys_getchildsyscount(void)
+{
+  int pid;
+  argint(0, &pid);
+  return kgetchildsyscount(pid);
+}

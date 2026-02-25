@@ -42,3 +42,10 @@ entry("getpid");
 entry("sbrk");
 entry("pause");
 entry("uptime");
+#new
+entry("hello");
+entry("getpid2");
+entry("getppid");
+entry("getnumchild");
+entry("getsyscount");
+entry("getchildsyscount");

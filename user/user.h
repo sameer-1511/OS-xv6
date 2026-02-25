@@ -24,6 +24,13 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+//new
+int hello(void);
+int getpid2(void);
+int getppid(void);
+int getnumchild(void);
+int getsyscount(void);
+int getchildsyscount(int);
 
 // ulib.c
 int stat(const char*, struct stat*);
