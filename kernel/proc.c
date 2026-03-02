@@ -375,9 +375,9 @@ kgetppid(void)
 {
   struct proc *p = myproc();
 
-  acquire(&wait_lock);
+  acquire(&p->lock);
   struct proc *parent = p->parent;
-  release(&wait_lock);
+  release(&p->lock);
 
   if(parent) return parent->pid;
   else return -1; 
@@ -390,13 +390,13 @@ kgetnumchild(void)
   struct proc *cp;
   int num_child = 0;
 
-  acquire(&wait_lock);
+  acquire(&pp->lock);
   for(cp = proc; cp < &proc[NPROC]; cp++){
     if(cp->parent == pp){
       num_child++;
     }
   }
-  release(&wait_lock);
+  release(&pp->lock);
 
   return num_child;
 }
@@ -409,7 +409,7 @@ kgetchildsyscount(int pid)
   struct proc *cp;
   int syscount = -1;
 
-  acquire(&wait_lock);
+  acquire(&pp->lock);
   for(cp = proc; cp < &proc[NPROC]; cp++){
     if(cp->parent == pp && cp->pid == pid){
       acquire(&cp->lock);
@@ -417,7 +417,7 @@ kgetchildsyscount(int pid)
       release(&cp->lock);
     }
   }
-  release(&wait_lock);
+  release(&pp->lock);
 
   return syscount;
 }
