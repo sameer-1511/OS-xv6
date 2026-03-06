@@ -151,3 +151,9 @@ sys_getchildsyscount(void)
   argint(0, &pid);
   return kgetchildsyscount(pid);
 }
+
+uint64
+sys_getlevel(void)
+{
+  return myproc()->qlevel;
+}

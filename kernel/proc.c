@@ -125,6 +125,14 @@ found:
   p->pid = allocpid();
   p->state = USED;
   p->syscount = 0; // initialize syscall count to 0
+  //mlfq
+  p->qlevel = 0; // initialize queue level to 0 (highest priority)
+  p->ticks_consumed = 0; // initialize ticks consumed to 0
+  for(int i = 0; i < 4; i++) {
+    p->total_ticks[i] = 2 << i; // initialize total ticks in each queue
+  }
+  p->scheduled_count = 0; // initialize scheduled count to 0
+  p->last_syscount = p->syscount; // initialize delta S to 0
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -171,6 +179,14 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->state = UNUSED;
   p->syscount = 0; // reset syscall count
+  //mlfq
+  p->qlevel = 0; // reset queue level
+  p->ticks_consumed = 0; // reset ticks consumed
+  for(int i = 0; i < 4; i++) {
+    p->total_ticks[i] = 2 << i; // reset total ticks
+  }
+  p->scheduled_count = 0; // reset scheduled count
+  p->last_syscount = p->syscount; // reset delta S
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -493,27 +509,53 @@ scheduler(void)
     intr_off();
 
     int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
+    for(int level = 0; level < 4; level++){
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->qlevel == level && p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+          p->state = RUNNING;
+          p->scheduled_count++; // increment scheduled count
+          c->proc = p;
+          swtch(&c->context, &p->context);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+          // Process is done running for now.
+          // It should have changed its p->state before coming back.
+          c->proc = 0;
+          found = 1;
+        }
+        release(&p->lock);
       }
-      release(&p->lock);
+      if(found == 0) {
+        // nothing to run; stop running on this core until an interrupt.
+        asm volatile("wfi");
+      }
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
-    }
+
+    // int found = 0;
+    // for(p = proc; p < &proc[NPROC]; p++) {
+    //   acquire(&p->lock);
+    //   if(p->state == RUNNABLE) {
+    //     // Switch to chosen process.  It is the process's job
+    //     // to release its lock and then reacquire it
+    //     // before jumping back to us.
+    //     p->state = RUNNING;
+    //     c->proc = p;
+    //     swtch(&c->context, &p->context);
+
+    //     // Process is done running for now.
+    //     // It should have changed its p->state before coming back.
+    //     c->proc = 0;
+    //     found = 1;
+    //   }
+    //   release(&p->lock);
+    // }
+    // if(found == 0) {
+    //   // nothing to run; stop running on this core until an interrupt.
+    //   asm volatile("wfi");
+    // }
   }
 }
 
@@ -551,6 +593,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  p->last_syscount = p->syscount; // update last_syscount before yielding
   sched();
   release(&p->lock);
 }
@@ -741,5 +784,23 @@ procdump(void)
       state = "???";
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+  }
+}
+
+void
+priority_boost(void)
+{
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+
+    if(p->state != UNUSED){
+      p->qlevel = 0;
+      p->ticks_consumed = 0;
+      p->last_syscount = p->syscount;
+    }
+
+    release(&p->lock);
   }
 }

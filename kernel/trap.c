@@ -81,8 +81,24 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    // struct proc *p = myproc();
+    if(p && p->state == RUNNING) {
+      p->ticks_consumed++;
+
+      int delta_S = p->syscount - p->last_syscount; // calculate delta S
+
+      if(delta_S < p->ticks_consumed){
+        if(p->ticks_consumed >= p->total_ticks[p->qlevel]) {
+          if(p->qlevel < 3) 
+            p->qlevel++;  // demote
+            
+          p->ticks_consumed = 0;
+        }
+      }
+    }
     yield();
+  }
 
   prepare_return();
 
@@ -167,6 +183,11 @@ clockintr()
   if(cpuid() == 0){
     acquire(&tickslock);
     ticks++;
+
+    if(ticks % 128 == 0){
+      priority_boost();
+    }
+
     wakeup(&ticks);
     release(&tickslock);
   }

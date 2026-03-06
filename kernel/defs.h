@@ -105,6 +105,7 @@ void            procdump(void);
 int             kgetppid(void);
 int             kgetnumchild(void);
 int             kgetchildsyscount(int pid);
+void            priority_boost(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

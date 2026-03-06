@@ -152,6 +152,7 @@ UPROGS=\
 	$U/_mtest_numchild\
 	$U/_mtest_syscount\
 	$U/_mtest_childsys\
+	$U/_mtest_level\
 	$U/_test_basic\
 	$U/_test_children\
 	$U/_test_fork_sysc\

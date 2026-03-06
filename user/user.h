@@ -31,6 +31,7 @@ int getppid(void);
 int getnumchild(void);
 int getsyscount(void);
 int getchildsyscount(int);
+int getlevel(void);
 
 // ulib.c
 int stat(const char*, struct stat*);
