@@ -90,10 +90,14 @@ usertrap(void)
 
       if(delta_S < p->ticks_consumed){
         if(p->ticks_consumed >= p->total_ticks[p->qlevel]) {
-          if(p->qlevel < 3) 
+          if(p->qlevel < 3){
             p->qlevel++;  // demote
+            // printf("||Process %d demoted to queue level %d\n", p->pid, p->qlevel);
+            // printf("|||Delta S: %d, Ticks Consumed: %d, syscount: %d, last syscount: %d\n", delta_S, p->ticks_consumed, p->syscount, p->last_syscount);
+          }
             
           p->ticks_consumed = 0;
+          p->last_syscount = p->syscount; // update last_syscount after demotion
         }
       }
     }
@@ -186,6 +190,7 @@ clockintr()
 
     if(ticks % 128 == 0){
       priority_boost();
+      printf("ticks = %d, priority boost\n", ticks);
     }
 
     wakeup(&ticks);

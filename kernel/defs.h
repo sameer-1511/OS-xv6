@@ -8,6 +8,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct mlfqinfo;
 
 // bio.c
 void            binit(void);
@@ -106,6 +107,7 @@ int             kgetppid(void);
 int             kgetnumchild(void);
 int             kgetchildsyscount(int pid);
 void            priority_boost(void);
+int             kgetmlfqinfo(int pid, struct mlfqinfo *info);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

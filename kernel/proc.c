@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "stat.h"
 
 struct cpu cpus[NCPU];
 
@@ -439,6 +440,33 @@ kgetchildsyscount(int pid)
 }
 
 int
+kgetmlfqinfo(int pid, struct mlfqinfo *info)
+{
+  struct proc *p;
+
+  if(info == 0) return -1;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      info->level = p->qlevel;
+      info->times_scheduled = p->scheduled_count;
+      info->total_syscalls = p->syscount;
+      for(int i=0; i<p->qlevel; i++)
+        info->ticks[i] = p->total_ticks[i];
+      info->ticks[p->qlevel] = p->ticks_consumed;
+      for(int i=p->qlevel+1; i<4; i++)
+        info->ticks[i] = 0;
+
+      release(&p->lock);
+      return 0; // success
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
 kwait(uint64 addr)
 {
   struct proc *pp;
@@ -593,7 +621,6 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  p->last_syscount = p->syscount; // update last_syscount before yielding
   sched();
   release(&p->lock);
 }

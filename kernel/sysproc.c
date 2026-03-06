@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "stat.h"
 
 uint64
 sys_exit(void)
@@ -156,4 +157,20 @@ uint64
 sys_getlevel(void)
 {
   return myproc()->qlevel;
+}
+
+uint64
+sys_getmlfqinfo(void)
+{
+  int pid;
+  uint64 addr;
+  struct mlfqinfo info;
+
+  argint(0, &pid);
+  argaddr(1, &addr);
+  if (kgetmlfqinfo(pid, &info) < 0)
+    return -1;
+  if (either_copyout(1, addr, (char*)&info, sizeof(info)) < 0)
+    return -1;
+  return 0;
 }

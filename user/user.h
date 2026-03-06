@@ -1,6 +1,7 @@
 #define SBRK_ERROR ((char *)-1)
 
 struct stat;
+struct mlfqinfo;
 
 // system calls
 int fork(void);
@@ -32,6 +33,7 @@ int getnumchild(void);
 int getsyscount(void);
 int getchildsyscount(int);
 int getlevel(void);
+int getmlfqinfo(int, struct mlfqinfo*);
 
 // ulib.c
 int stat(const char*, struct stat*);
