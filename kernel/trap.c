@@ -8,6 +8,7 @@
 
 struct spinlock tickslock;
 uint ticks;
+int quantum[4] = {2, 4, 8, 16};
 
 extern char trampoline[], uservec[];
 
@@ -84,21 +85,29 @@ usertrap(void)
   if(which_dev == 2){
     // struct proc *p = myproc();
     if(p && p->state == RUNNING) {
+      
       p->ticks_consumed++;
+      p->total_ticks[p->qlevel]++; // increment total ticks in current queue
 
-      int delta_S = p->syscount - p->last_syscount; // calculate delta S
+      int delta_S = p->syscount - p->last_syscount;
+      int delta_T = p->ticks_consumed; // delta T is ticks consumed in current queue
+      int Interactive = (delta_S>=delta_T);
 
-      if(delta_S < p->ticks_consumed){
-        if(p->ticks_consumed >= p->total_ticks[p->qlevel]) {
-          if(p->qlevel < 3){
-            p->qlevel++;  // demote
-            // printf("||Process %d demoted to queue level %d\n", p->pid, p->qlevel);
-            // printf("|||Delta S: %d, Ticks Consumed: %d, syscount: %d, last syscount: %d\n", delta_S, p->ticks_consumed, p->syscount, p->last_syscount);
-          }
-            
-          p->ticks_consumed = 0;
-          p->last_syscount = p->syscount; // update last_syscount after demotion
+
+      if(!Interactive && p->ticks_consumed >= quantum[p->qlevel]) {
+        if(p->qlevel < 3){
+          p->qlevel++;  // demote
+          // printf("||Process %d demoted to queue level %d\n", p->pid, p->qlevel);
+          // printf("|||Delta S: %d, Ticks Consumed: %d, syscount: %d, last syscount: %d\n", delta_S, p->ticks_consumed, p->syscount, p->last_syscount);
         }
+          
+        p->ticks_consumed = 0;
+        p->last_syscount = p->syscount; // update last_syscount after demotion
+      }
+      else if(Interactive && p->ticks_consumed >= quantum[p->qlevel]) {
+        // Interactive: used full quantum without demotion, reset window
+        p->ticks_consumed = 0;
+        p->last_syscount = p->syscount;
       }
     }
     yield();
@@ -190,7 +199,7 @@ clockintr()
 
     if(ticks % 128 == 0){
       priority_boost();
-      printf("ticks = %d, priority boost\n", ticks);
+      // printf("ticks = %d, priority boost\n", ticks);
     }
 
     wakeup(&ticks);

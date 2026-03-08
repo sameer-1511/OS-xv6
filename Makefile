@@ -152,12 +152,15 @@ UPROGS=\
 	$U/_mtest_numchild\
 	$U/_mtest_syscount\
 	$U/_mtest_childsys\
-	$U/_mtest_level\
-	$U/_mtest_info\
 	$U/_test_basic\
 	$U/_test_children\
 	$U/_test_fork_sysc\
 	$U/_test_syscount\
+	$U/_t_all\
+	$U/_t_cpu\
+	$U/_t_io\
+	$U/_t_mixed\
+	$U/_t_starve\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

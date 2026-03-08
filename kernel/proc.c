@@ -130,7 +130,7 @@ found:
   p->qlevel = 0; // initialize queue level to 0 (highest priority)
   p->ticks_consumed = 0; // initialize ticks consumed to 0
   for(int i = 0; i < 4; i++) {
-    p->total_ticks[i] = 2 << i; // initialize total ticks in each queue
+    p->total_ticks[i] = 0; // initialize total ticks in each queue
   }
   p->scheduled_count = 0; // initialize scheduled count to 0
   p->last_syscount = p->syscount; // initialize delta S to 0
@@ -184,7 +184,7 @@ freeproc(struct proc *p)
   p->qlevel = 0; // reset queue level
   p->ticks_consumed = 0; // reset ticks consumed
   for(int i = 0; i < 4; i++) {
-    p->total_ticks[i] = 2 << i; // reset total ticks
+    p->total_ticks[i] = 0; // reset total ticks
   }
   p->scheduled_count = 0; // reset scheduled count
   p->last_syscount = p->syscount; // reset delta S
@@ -407,13 +407,13 @@ kgetnumchild(void)
   struct proc *cp;
   int num_child = 0;
 
-  acquire(&pp->lock);
+  acquire(&wait_lock);
   for(cp = proc; cp < &proc[NPROC]; cp++){
     if(cp->parent == pp){
       num_child++;
     }
   }
-  release(&pp->lock);
+  release(&wait_lock);
 
   return num_child;
 }
@@ -452,11 +452,8 @@ kgetmlfqinfo(int pid, struct mlfqinfo *info)
       info->level = p->qlevel;
       info->times_scheduled = p->scheduled_count;
       info->total_syscalls = p->syscount;
-      for(int i=0; i<p->qlevel; i++)
+      for(int i=0; i<4; i++)
         info->ticks[i] = p->total_ticks[i];
-      info->ticks[p->qlevel] = p->ticks_consumed;
-      for(int i=p->qlevel+1; i<4; i++)
-        info->ticks[i] = 0;
 
       release(&p->lock);
       return 0; // success
@@ -546,20 +543,21 @@ scheduler(void)
         // before jumping back to us.
           p->state = RUNNING;
           p->scheduled_count++; // increment scheduled count
+          
           c->proc = p;
           swtch(&c->context, &p->context);
-
           // Process is done running for now.
           // It should have changed its p->state before coming back.
           c->proc = 0;
           found = 1;
         }
         release(&p->lock);
+        if(found) break;
       }
-      if(found == 0) {
-        // nothing to run; stop running on this core until an interrupt.
-        asm volatile("wfi");
-      }
+    }
+    if(found == 0) {
+      // nothing to run; stop running on this core until an interrupt.
+      asm volatile("wfi");
     }
 
     // int found = 0;
