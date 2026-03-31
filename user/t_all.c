@@ -6,7 +6,6 @@
 //   3. getmlfqinfo() returns -1 for an invalid PID
 
 #include "kernel/types.h"
-#include "kernel/stat.h"
 #include "user/user.h"
 
 int main(void) {

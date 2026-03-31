@@ -5,7 +5,6 @@
 // Expectation: processes remain at Level 0 or Level 1.
 
 #include "kernel/types.h"
-#include "kernel/stat.h"
 #include "user/user.h"
 
 #define NUM_PROCS   3

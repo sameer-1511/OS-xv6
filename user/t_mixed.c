@@ -5,7 +5,6 @@
 // more CPU time due to higher priority.
 
 #include "kernel/types.h"
-#include "kernel/stat.h"
 #include "user/user.h"
 
 #define CPU_PROCS    2

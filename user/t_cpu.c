@@ -4,7 +4,6 @@
 // because they never yield voluntarily and burn full time quanta.
 
 #include "kernel/types.h"
-#include "kernel/stat.h"
 #include "user/user.h"
 
 #define NUM_PROCS 3

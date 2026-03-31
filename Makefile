@@ -161,6 +161,9 @@ UPROGS=\
 	$U/_t_io\
 	$U/_t_mixed\
 	$U/_t_starve\
+	$U/_PA2_1\
+	$U/_PA2_2\
+	$U/_PA2_3\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

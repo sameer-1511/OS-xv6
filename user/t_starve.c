@@ -6,7 +6,6 @@
 // process returns to Level 0, preventing starvation
 
 #include "kernel/types.h"
-#include "kernel/stat.h"
 #include "user/user.h"
 
 #define SAMPLE_INTERVAL 50     // iterations between level samples

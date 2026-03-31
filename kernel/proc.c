@@ -554,6 +554,7 @@ scheduler(void)
         release(&p->lock);
         if(found) break;
       }
+      if(found) break;
     }
     if(found == 0) {
       // nothing to run; stop running on this core until an interrupt.
