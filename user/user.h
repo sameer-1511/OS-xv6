@@ -34,6 +34,7 @@ int getsyscount(void);
 int getchildsyscount(int);
 int getlevel(void);
 int getmlfqinfo(int, struct mlfqinfo*);
+int getvmstats(int, struct vmstats*);
 
 // ulib.c
 int stat(const char*, struct stat*);

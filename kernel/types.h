@@ -15,3 +15,18 @@ struct mlfqinfo {
   int times_scheduled; // number of times the process has been scheduled
   int total_syscalls; // total system calls made
 };
+
+struct frame {
+  int in_use; // whether the frame is currently in use
+  struct proc *owner; // which process owns this frame
+  uint64 va; // virtual address mapped to this frame
+  int ref_bits; // reference bits for page replacement
+};
+
+struct vmstats {
+  int page_faults;
+  int pages_evicted;
+  int pages_swapped_in;
+  int pages_swapped_out;
+  int resident_pages;
+};

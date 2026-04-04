@@ -41,14 +41,14 @@ uint64
 sys_sbrk(void)
 {
   uint64 addr;
-  int t;
+  //int t = SBRK_LAZY;
   int n;
 
   argint(0, &n);
-  argint(1, &t);
+  //argint(1, &t);
   addr = myproc()->sz;
 
-  if(t == SBRK_EAGER || n < 0) {
+  if(n < 0) {
     if(growproc(n) < 0) {
       return -1;
     }
@@ -169,6 +169,22 @@ sys_getmlfqinfo(void)
   argint(0, &pid);
   argaddr(1, &addr);
   if (kgetmlfqinfo(pid, &info) < 0)
+    return -1;
+  if (either_copyout(1, addr, (char*)&info, sizeof(info)) < 0)
+    return -1;
+  return 0;
+}
+
+uint64
+sys_getvmstats(void)
+{
+  int pid;
+  uint64 addr;
+  struct vmstats info;
+
+  argint(0, &pid);
+  argaddr(1, &addr);
+  if (kgetvmstats(pid, &info) < 0)
     return -1;
   if (either_copyout(1, addr, (char*)&info, sizeof(info)) < 0)
     return -1;

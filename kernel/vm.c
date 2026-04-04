@@ -8,6 +8,19 @@
 #include "proc.h"
 #include "fs.h"
 
+//frame table
+struct spinlock framelock;
+struct frame frametable[MAXFRAMES];
+int clock_hand = 0;
+
+//swap space
+#define MAX_SWAP 8192
+#define PTE_S (1L << 9)
+
+char swapspace[MAX_SWAP][PGSIZE];
+int swap_used[MAX_SWAP];
+struct spinlock swaplock;
+
 /*
  * the kernel's page table.
  */
@@ -66,6 +79,22 @@ void
 kvminit(void)
 {
   kernel_pagetable = kvmmake();
+  initlock(&framelock, "frametable");
+
+  acquire(&framelock);
+  for(int i = 0; i < MAXFRAMES; i++) {
+    frametable[i].in_use = 0;
+    frametable[i].owner = 0;
+    frametable[i].va = 0;
+    frametable[i].ref_bits = 0;
+  }
+  release(&framelock);
+
+  initlock(&swaplock, "swap");
+
+  for(int i = 0; i < MAX_SWAP; i++){
+    swap_used[i] = 0;
+  }
 }
 
 // Switch the current CPU's h/w page table register to
@@ -134,6 +163,10 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
+
+  if((*pte & PTE_V)){
+    update_refbit(myproc(), PGROUNDDOWN(va));
+  }
   return pa;
 }
 
@@ -201,10 +234,29 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
       continue;   
-    if((*pte & PTE_V) == 0)  // has physical page been allocated?
+    if((*pte & PTE_V) == 0){
+      *pte = 0;
       continue;
+    }
+
     if(do_free){
       uint64 pa = PTE2PA(*pte);
+      // remove from frame table
+      acquire(&framelock);
+      for(int i = 0; i < MAXFRAMES; i++){
+        if(frametable[i].in_use && frametable[i].owner != 0){
+          pte_t *fp = walk(frametable[i].owner->pagetable, frametable[i].va, 0);
+          if(fp && (*fp & PTE_V) && PTE2PA(*fp) == pa){
+            frametable[i].in_use = 0;
+            frametable[i].owner = 0;
+            frametable[i].va = 0;
+            frametable[i].ref_bits = 0;
+            break;
+          }
+        }
+      }
+      release(&framelock);
+
       kfree((void*)pa);
     }
     *pte = 0;
@@ -290,20 +342,65 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
-// physical memory.
+// physical memory. Handles both in-memory
+// pages and swapped-out pages.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
 int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent)
 {
   pte_t *pte;
   uint64 pa, i;
   uint flags;
   char *mem;
+  extern char swapspace[][PGSIZE];
+  extern int swap_used[];
+  extern struct spinlock swaplock;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       continue;   // page table entry hasn't been allocated
+    
+    // Handle swapped pages
+    if((*pte & PTE_S)) {
+      // This is a swapped page - copy from swap space
+      int parent_slot = parent->swap_index[i/PGSIZE];
+      if(parent_slot < 0 || parent_slot >= MAX_SWAP) {
+        goto err;  // Invalid swap slot
+      }
+      
+      // Allocate new swap slot in swap space
+      acquire(&swaplock);
+      int child_slot = -1;
+      for(int j = 0; j < MAX_SWAP; j++){
+        if(swap_used[j] == 0){
+          swap_used[j] = 1;
+          child_slot = j;
+          break;
+        }
+      }
+      release(&swaplock);
+      
+      if(child_slot < 0) {
+        goto err;  // No swap space available
+      }
+      
+      // Copy data from parent's swap slot to child's
+      memmove(swapspace[child_slot], swapspace[parent_slot], PGSIZE);
+      
+      // Get the pointer to PTE in new page table
+      pte_t *newpte = walk(new, i, 1);
+      if(newpte == 0)
+        goto err;
+      
+      // Copy the swapped PTE with PTE_S flag
+      *newpte = (*pte) | PTE_S;  // Copy PTE flags, set swapped bit
+      *newpte &= ~PTE_V;  // Ensure valid bit is not set
+      *newpte |= PTE_S;   // Ensure swapped bit is set
+      
+      continue;  // Skip to next page
+    }
+    
     if((*pte & PTE_V) == 0)
       continue;   // physical page hasn't been allocated
     pa = PTE2PA(*pte);
@@ -367,6 +464,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       n = len;
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
+    update_refbit(myproc(), va0);
+
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
@@ -384,6 +483,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0) {
       if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
@@ -394,6 +494,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     if(n > len)
       n = len;
     memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+    update_refbit(myproc(), va0);
 
     len -= n;
     dst += n;
@@ -415,8 +516,11 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   while(got_null == 0 && max > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    if(pa0 == 0){
+      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
+        return -1;
+      }
+    }
     n = PGSIZE - (srcva - va0);
     if(n > max)
       n = max;
@@ -458,17 +562,106 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   if (va >= p->sz)
     return 0;
   va = PGROUNDDOWN(va);
+
+  p->page_faults++;
+
+  pte_t *pte = walk(pagetable, va, 0);
+  // if(pte){
+  //   printf("FAULT: va=%lx pte=%p flags=%lx\n", va, pte, *pte);
+  // }
+
+  //Swapped page
+  if(pte && (*pte & PTE_S)) {
+    // Enforce frame-limit-based eviction, even if kalloc() still has physical pages.
+    //printf("Swap In triggered for va=0x%lx\n", va);
+    if(!free_frame_exists()) {
+      struct frame *victim = select_eviction_frame();
+      evict_page(victim);
+    }
+
+    mem = (uint64) kalloc();
+    if(mem == 0){
+      struct frame *victim = select_eviction_frame();    
+      evict_page(victim);
+      mem = (uint64) kalloc();
+      if(mem == 0){
+        panic("vmfault: out of memory after eviction");
+      }
+    }
+
+    int slot = p->swap_index[va/PGSIZE];
+    memmove((void*)mem, swapspace[slot], PGSIZE);
+
+    p->swap_index[va/PGSIZE] = -1;
+
+    acquire(&swaplock);
+    swap_used[slot] = 0;
+    release(&swaplock);
+
+    *pte = PA2PTE(mem) | PTE_R | PTE_W | PTE_U | PTE_V;
+    *pte &= ~PTE_S; 
+
+    sfence_vma(); //flush TLB
+
+    acquire(&framelock);
+    for(int i = 0; i<MAXFRAMES; i++) {
+      if(frametable[i].in_use == 0) {
+        frametable[i].in_use = 1;
+        frametable[i].owner = p;
+        frametable[i].va = va;
+        frametable[i].ref_bits = 1;
+        break;
+      }
+    }
+    release(&framelock);
+
+    p->pages_swapped_in++;
+    p->resident_pages++;
+    return mem;
+  }
+  
+  //Normal page
   if(ismapped(pagetable, va)) {
     return 0;
   }
+
+  // Enforce frame-limit-based eviction, even if kalloc() has free pages.
+  if(!free_frame_exists()) {
+    struct frame *victim = select_eviction_frame();
+    evict_page(victim);
+  }
+
   mem = (uint64) kalloc();
-  if(mem == 0)
-    return 0;
+  if(mem == 0){
+    struct frame *victim = select_eviction_frame();
+    evict_page(victim);
+    mem = (uint64) kalloc();
+    if (mem == 0){
+      panic("vmfault: out of memory after eviction");
+    }
+  }
+
   memset((void *) mem, 0, PGSIZE);
   if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
     kfree((void *)mem);
     return 0;
   }
+
+  acquire(&framelock);
+  for(int i = 0; i < MAXFRAMES; i++) {
+    if(frametable[i].in_use == 0) {
+      frametable[i].in_use = 1;
+      frametable[i].owner = p;
+      frametable[i].va = va;
+      frametable[i].ref_bits = 1;
+      break;
+    }
+  }
+  release(&framelock);
+
+  sfence_vma(); //flush TLB
+
+  p->resident_pages++;
   return mem;
 }
 
@@ -479,8 +672,166 @@ ismapped(pagetable_t pagetable, uint64 va)
   if (pte == 0) {
     return 0;
   }
-  if (*pte & PTE_V){
+  // if (*pte & PTE_V || *pte & PTE_S) {
+  if(*pte & PTE_V) {
     return 1;
   }
   return 0;
+}
+
+// Return 1 if there is at least one free frame in the frame table.
+int
+free_frame_exists(void)
+{
+  int exists = 0;
+  acquire(&framelock);
+  for(int i = 0; i < MAXFRAMES; i++) {
+    if(frametable[i].in_use == 0) {
+      exists = 1;
+      break;
+    }
+  }
+  release(&framelock);
+  return exists;
+}
+
+//Eviction
+struct frame* select_eviction_frame(){
+
+  acquire(&framelock);
+  struct frame *best = 0;
+  int count = 0;
+
+  while(count < 2*MAXFRAMES){
+    struct frame* f = &frametable[clock_hand];
+    clock_hand = (clock_hand + 1) % MAXFRAMES;
+    count++;
+
+    if(!f->in_use || f->owner == 0){
+      continue;
+    }
+    pte_t *pte = walk(f->owner->pagetable, f->va, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0){
+      continue;
+    }
+    if(f->ref_bits == 1){
+      f->ref_bits = 0;
+      continue;
+    }
+
+    if(best == 0 || f->owner->qlevel > best->owner->qlevel){
+      best = f;
+    }
+  }
+
+  if(best == 0){
+    release(&framelock);
+    panic("select_eviction_frame: no frame to evict");
+  }
+
+  best->in_use = 2; // Mark as in use to prevent eviction by another thread
+  release(&framelock);
+  return best;
+}
+// struct frame* select_eviction_frame(){
+//   struct frame *best = 0;
+
+//   acquire(&framelock);
+
+//   for(int count = 0; count < MAXFRAMES; count++){
+//     struct frame* f = &frametable[clock_hand];
+
+//     if(f->in_use && f->owner != 0){
+
+//       // NEW: validate mapping
+//       pte_t *pte = walk(f->owner->pagetable, f->va, 0);
+//       if(pte == 0 || (*pte & PTE_V) == 0){
+//         clock_hand = (clock_hand + 1) % MAXFRAMES;
+//         continue;
+//       }
+
+//       if(f->ref_bits == 0){
+//         if(best == 0 || f->owner->qlevel > best->owner->qlevel){
+//           best = f;
+//         }
+//       } else {
+//         f->ref_bits = 0;
+//       }
+//     }
+
+//     clock_hand = (clock_hand + 1) % MAXFRAMES;
+//   }
+
+//   release(&framelock);
+
+//   if(best == 0){
+//     panic("select_eviction_frame: no frame");
+//   }
+
+//   return best;
+// }
+
+void evict_page(struct frame *victim){
+  struct proc *p = victim->owner;
+  uint64 va = victim->va;
+
+  pte_t *pte = walk(p->pagetable, va, 0);
+  if(pte == 0 || (*pte & PTE_V) == 0){
+    return; // Page is not mapped, nothing to evict
+  }
+  uint64 pa = PTE2PA(*pte);
+
+  acquire(&swaplock);
+  int slot = -1;
+  for(int i = 0; i < MAX_SWAP; i++){
+    if(swap_used[i] == 0){
+      swap_used[i] = 1;
+      slot = i;
+      break;
+    }
+  }
+  release(&swaplock);
+
+  if(slot == -1)
+    panic("swap full");
+
+  memmove(swapspace[slot], (void*)pa, PGSIZE);
+
+  if(va / PGSIZE >= MAX_PROC_PAGES)
+    panic("evict_page: va out of swap_index range");
+  p->swap_index[va/PGSIZE] = slot;
+
+  *pte &= ~PTE_V;   // invalidate
+  *pte |= PTE_S;    // mark swapped
+  //printf("EVICT: va=%lx pte=%p flags=%lx\n", va, pte, *pte);
+
+  sfence_vma(); //flush TLB
+
+  kfree((void*)pa);
+
+  p->pages_evicted++;
+  p->pages_swapped_out++;
+  p->resident_pages--;
+
+  acquire(&framelock);
+  victim->in_use = 0;
+  victim->owner = 0;
+  victim->va = 0;
+  victim->ref_bits = 0;
+  release(&framelock);
+}
+
+void update_refbit(struct proc *p, uint64 va) {
+  acquire(&framelock);
+
+  for(int i = 0; i < MAXFRAMES; i++) {
+    if(frametable[i].in_use &&
+       frametable[i].owner == p &&
+       frametable[i].va == va) {
+      frametable[i].ref_bits = 1;
+      break;
+    }
+  }
+
+  release(&framelock);
 }

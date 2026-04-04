@@ -9,6 +9,8 @@ struct sleeplock;
 struct stat;
 struct superblock;
 struct mlfqinfo;
+struct vmstats;
+struct frame;
 
 
 // bio.c
@@ -109,6 +111,7 @@ int             kgetnumchild(void);
 int             kgetchildsyscount(int pid);
 void            priority_boost(void);
 int             kgetmlfqinfo(int pid, struct mlfqinfo *info);
+int             kgetvmstats(int pid, struct vmstats *info);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -166,7 +169,7 @@ int             mappages(pagetable_t, uint64, uint64, uint64, int);
 pagetable_t     uvmcreate(void);
 uint64          uvmalloc(pagetable_t, uint64, uint64, int);
 uint64          uvmdealloc(pagetable_t, uint64, uint64);
-int             uvmcopy(pagetable_t, pagetable_t, uint64);
+int             uvmcopy(pagetable_t, pagetable_t, uint64, struct proc*);
 void            uvmfree(pagetable_t, uint64);
 void            uvmunmap(pagetable_t, uint64, uint64, int);
 void            uvmclear(pagetable_t, uint64);
@@ -177,6 +180,11 @@ int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             ismapped(pagetable_t, uint64);
 uint64          vmfault(pagetable_t, uint64, int);
+void            update_refbit(struct proc *, uint64);
+//new
+struct frame* select_eviction_frame(void);
+void evict_page(struct frame *f);
+int free_frame_exists(void);
 
 // plic.c
 void            plicinit(void);

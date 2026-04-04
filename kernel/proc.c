@@ -134,7 +134,15 @@ found:
   }
   p->scheduled_count = 0; // initialize scheduled count to 0
   p->last_syscount = p->syscount; // initialize delta S to 0
-
+  //vmstats
+  p->page_faults = 0;
+  p->pages_evicted = 0;
+  p->pages_swapped_in = 0;
+  p->pages_swapped_out = 0;
+  p->resident_pages = 0;
+  for(int i = 0; i < MAX_PROC_PAGES; i++)
+    p->swap_index[i] = -1;
+    
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -188,6 +196,37 @@ freeproc(struct proc *p)
   }
   p->scheduled_count = 0; // reset scheduled count
   p->last_syscount = p->syscount; // reset delta S
+  //vmstats
+  extern int swap_used[];
+  extern struct spinlock swaplock;
+  acquire(&swaplock);
+  for(int i = 0; i < MAX_PROC_PAGES; i++){
+    if(p->swap_index[i] >= 0){
+      swap_used[p->swap_index[i]] = 0;
+      p->swap_index[i] = -1;
+    }
+  }
+  release(&swaplock);
+
+  extern struct frame frametable[];
+  extern struct spinlock framelock;
+
+  acquire(&framelock);
+  for(int i = 0; i < MAXFRAMES; i++){
+    if(frametable[i].owner == p){
+      frametable[i].in_use = 0;
+      frametable[i].owner = 0;
+      frametable[i].va = 0;
+      frametable[i].ref_bits = 0;
+    }
+  }
+  release(&framelock);
+
+  p->page_faults = 0;
+  p->pages_evicted = 0;
+  p->pages_swapped_in = 0;
+  p->pages_swapped_out = 0;
+  p->resident_pages = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -288,12 +327,17 @@ kfork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz, p) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
   }
   np->sz = p->sz;
+  
+  // Copy swap indices from parent to child
+  for(int i = 0; i < MAX_PROC_PAGES; i++) {
+    np->swap_index[i] = p->swap_index[i];
+  }
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -454,6 +498,30 @@ kgetmlfqinfo(int pid, struct mlfqinfo *info)
       info->total_syscalls = p->syscount;
       for(int i=0; i<4; i++)
         info->ticks[i] = p->total_ticks[i];
+
+      release(&p->lock);
+      return 0; // success
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
+kgetvmstats(int pid, struct vmstats *info)
+{
+  struct proc *p;
+
+  if(info == 0) return -1;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      info->page_faults = p->page_faults;
+      info->pages_evicted = p->pages_evicted;
+      info->pages_swapped_in = p->pages_swapped_in;
+      info->pages_swapped_out = p->pages_swapped_out;
+      info->resident_pages = p->resident_pages;
 
       release(&p->lock);
       return 0; // success

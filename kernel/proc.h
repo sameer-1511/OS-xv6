@@ -1,3 +1,4 @@
+#define MAX_PROC_PAGES 4096
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -112,4 +113,13 @@ struct proc {
   int total_ticks[4];
   int scheduled_count;
   int last_syscount;
+
+  // page replacement
+  int page_faults;
+  int pages_evicted;
+  int pages_swapped_in;
+  int pages_swapped_out;
+  int resident_pages;
+  int swap_index[MAX_PROC_PAGES]; // track which swap slots the process is using
+  
 };
