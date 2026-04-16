@@ -146,31 +146,34 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
-	$U/_mtest_hello\
-	$U/_mtest_getpid2\
-	$U/_mtest_getppid\
-	$U/_mtest_numchild\
-	$U/_mtest_syscount\
-	$U/_mtest_childsys\
 	$U/_test_basic\
 	$U/_test_children\
 	$U/_test_fork_sysc\
 	$U/_test_syscount\
-	$U/_t_all\
-	$U/_t_cpu\
-	$U/_t_io\
-	$U/_t_mixed\
-	$U/_t_starve\
 	$U/_PA2_1\
 	$U/_PA2_2\
 	$U/_PA2_3\
-	$U/_t31\
-	$U/_t32\
-	$U/_t33\
-	$U/_t34\
-	$U/_t35\
-	$U/_t36\
-	$U/_t37\
+	$U/_test_pager\
+	$U/_test_scheduler\
+	$U/_test_swapnr\
+# 	$U/_t31\
+# 	$U/_t32\
+# 	$U/_t33\
+# 	$U/_t34\
+# 	$U/_t35\
+# 	$U/_t36\
+# 	$U/_t37\
+# 	$U/_mtest_hello\
+# 	$U/_mtest_getpid2\
+# 	$U/_mtest_getppid\
+# 	$U/_mtest_numchild\
+# 	$U/_mtest_syscount\
+# 	$U/_mtest_childsys\
+# 	$U/_t_all\
+# 	$U/_t_cpu\
+# 	$U/_t_io\
+# 	$U/_t_mixed\
+# 	$U/_t_starve\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -347,7 +347,7 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
 int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent)
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent, struct proc *child)
 {
   pte_t *pte;
   uint64 pa, i;
@@ -398,6 +398,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent)
       *newpte &= ~PTE_V;  // Ensure valid bit is not set
       *newpte |= PTE_S;   // Ensure swapped bit is set
       
+      child->swap_index[i/PGSIZE] = child_slot;
       continue;  // Skip to next page
     }
     
@@ -412,6 +413,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent)
       kfree(mem);
       goto err;
     }
+    child->resident_pages++;
   }
   return 0;
 

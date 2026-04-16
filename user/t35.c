@@ -18,5 +18,5 @@ int main() {
   struct vmstats st;
   getvmstats(getpid(), &st);
 
-  printf("PF=%d EV=%d SI=%d SO=%d RI=%d(should be > 0)\n", st.page_faults, st.pages_evicted, st.pages_swapped_in, st.pages_swapped_out, st.resident_pages);
+  printf("PF=%d EV=%d SI=%d SO=%d RI=%d(SI should be > 0)\n", st.page_faults, st.pages_evicted, st.pages_swapped_in, st.pages_swapped_out, st.resident_pages);
 }
