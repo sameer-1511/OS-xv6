@@ -190,3 +190,54 @@ sys_getvmstats(void)
     return -1;
   return 0;
 }
+
+uint64 
+sys_setdisksched(void)
+{
+  int policy;
+  argint(0, &policy);
+
+  if(policy == 0 || policy == 1){
+    disk_policy = policy;
+  }
+
+  return 0;
+}
+
+uint64
+sys_setraidmode(void)
+{
+  int mode;
+  argint(0, &mode);
+  if(mode < 0 || mode > 2)
+    return -1;
+  extern int raid_mode;
+  raid_mode = mode;
+  return 0;
+}
+
+uint64
+sys_getdiskstats(void)
+{
+  uint64 addr;
+  argaddr(0, &addr);
+
+  // struct diskstats {
+  //   uint64 disk_reads;
+  //   uint64 disk_writes;
+  //   uint64 avg_disk_latency;   // scaled x100 to avoid floats
+  // };
+
+  struct proc *p = myproc();
+  struct diskstats ds;
+  ds.disk_reads  = p->disk_reads;
+  ds.disk_writes = p->disk_writes;
+
+  uint64 reqs = get_total_requests();
+  uint64 lat  = get_total_latency();
+  ds.avg_disk_latency = reqs > 0 ? (lat * 100) / reqs : 0;
+
+  if(copyout(p->pagetable, addr, (char*)&ds, sizeof(ds)) < 0)
+    return -1;
+  return 0;
+}

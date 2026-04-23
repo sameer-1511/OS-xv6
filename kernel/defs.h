@@ -12,6 +12,11 @@ struct mlfqinfo;
 struct vmstats;
 struct frame;
 
+//disk
+#define SWAP_START_BLOCK 100
+#define MAX_SWAP_BLOCKS 475
+#define BLOCKS_PER_PAGE (PGSIZE / BSIZE)
+
 
 // bio.c
 void            binit(void);
@@ -181,6 +186,7 @@ int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             ismapped(pagetable_t, uint64);
 uint64          vmfault(pagetable_t, uint64, int);
 void            update_refbit(struct proc *, uint64);
+int             allocate_swap_block(void);
 //new
 struct frame* select_eviction_frame(void);
 void evict_page(struct frame *f);
@@ -196,6 +202,13 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+// void            enqueue_req(struct buf *, int);
+// void            virtio_disk_submit(struct buf *, int);
+// struct disk_req dequeue_req();
+// void            start_next_req();
+extern int disk_policy;   // 0 = FCFS, 1 = SSTF
+uint64          get_total_latency(void);
+uint64          get_total_requests(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

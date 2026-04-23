@@ -4,6 +4,7 @@
 #include "riscv.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "fs.h"
 #include "defs.h"
 #include "stat.h"
 
@@ -140,6 +141,8 @@ found:
   p->pages_swapped_in = 0;
   p->pages_swapped_out = 0;
   p->resident_pages = 0;
+  p->disk_reads = 0;
+  p->disk_writes = 0;
   for(int i = 0; i < MAX_PROC_PAGES; i++)
     p->swap_index[i] = -1;
     
@@ -197,12 +200,15 @@ freeproc(struct proc *p)
   p->scheduled_count = 0; // reset scheduled count
   p->last_syscount = p->syscount; // reset delta S
   //vmstats
-  extern int swap_used[];
   extern struct spinlock swaplock;
+  extern int swap_bitmap[];
+
   acquire(&swaplock);
   for(int i = 0; i < MAX_PROC_PAGES; i++){
     if(p->swap_index[i] >= 0){
-      swap_used[p->swap_index[i]] = 0;
+      int idx = (p->swap_index[i] - SWAP_START_BLOCK) / BLOCKS_PER_PAGE;
+      if(idx >= 0 && idx < MAX_SWAP_BLOCKS)
+        swap_bitmap[idx] = 0;
       p->swap_index[i] = -1;
     }
   }
@@ -227,6 +233,9 @@ freeproc(struct proc *p)
   p->pages_swapped_in = 0;
   p->pages_swapped_out = 0;
   p->resident_pages = 0;
+  //disk
+  p->disk_reads = 0;
+  p->disk_writes = 0;
 }
 
 // Create a user page table for a given process, with no user memory,

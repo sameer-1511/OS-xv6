@@ -121,5 +121,8 @@ struct proc {
   int pages_swapped_out;
   int resident_pages;
   int swap_index[MAX_PROC_PAGES]; // track which swap slots the process is using
-  
+
+  //disk
+  int disk_reads;
+  int disk_writes;
 };

@@ -30,3 +30,9 @@ struct vmstats {
   int pages_swapped_out;
   int resident_pages;
 };
+
+struct diskstats {
+  uint64 disk_reads;
+  uint64 disk_writes;
+  uint64 avg_disk_latency; 
+};

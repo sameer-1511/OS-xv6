@@ -13,5 +13,5 @@
 #define MAXPATH      128   // maximum file path name
 #define USERSTACK    1     // user stack pages
 #define MAX_PROC_PAGES 4096 // maximum number of pages per process
-#define MAXFRAMES 256 // maximum number of physical frames
+#define MAXFRAMES 128 // maximum number of physical frames
 

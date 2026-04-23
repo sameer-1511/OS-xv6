@@ -33,14 +33,14 @@ int main() {
 
 int main() {
   if(fork() == 0){
-    char *p = sbrk(800 * 4096);
-    for(int i = 0; i < 800; i++)
+    char *p = sbrk(300 * 4096);
+    for(int i = 0; i < 300; i++)
       p[i * 4096] = 1;
     pause(100);
     exit(0);
   } else {
-    char *p = sbrk(800 * 4096);
-    for(int i = 0; i < 800; i++)
+    char *p = sbrk(300 * 4096);
+    for(int i = 0; i < 300; i++)
       p[i * 4096] = 2;
     wait(0);
   }

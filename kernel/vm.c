@@ -7,6 +7,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
+#include "sleeplock.h"
+#include "buf.h"
+
 
 //frame table
 struct spinlock framelock;
@@ -14,11 +17,21 @@ struct frame frametable[MAXFRAMES];
 int clock_hand = 0;
 
 //swap space
-#define MAX_SWAP 8192
+// #define MAX_SWAP 8192
+// #define PTE_S (1L << 9)
+
+// char swapspace[MAX_SWAP][PGSIZE];
+// int swap_used[MAX_SWAP];
+// struct spinlock swaplock;
+
 #define PTE_S (1L << 9)
 
-char swapspace[MAX_SWAP][PGSIZE];
-int swap_used[MAX_SWAP];
+// Disk-backed swap
+// #define SWAP_START_BLOCK 1000
+// #define MAX_SWAP_BLOCKS 8192
+// #define BLOCKS_PER_PAGE (PGSIZE / BSIZE)
+
+int swap_bitmap[MAX_SWAP_BLOCKS];
 struct spinlock swaplock;
 
 /*
@@ -90,10 +103,16 @@ kvminit(void)
   }
   release(&framelock);
 
-  initlock(&swaplock, "swap");
+  // initlock(&swaplock, "swap");
 
-  for(int i = 0; i < MAX_SWAP; i++){
-    swap_used[i] = 0;
+  // for(int i = 0; i < MAX_SWAP; i++){
+  //   swap_used[i] = 0;
+  // }
+
+  initlock(&swaplock, "swap");
+  
+  for(int i = 0; i < MAX_SWAP_BLOCKS; i++){
+    swap_bitmap[i] = 0;
   }
 }
 
@@ -353,8 +372,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent, struct
   uint64 pa, i;
   uint flags;
   char *mem;
-  extern char swapspace[][PGSIZE];
-  extern int swap_used[];
+  // extern char swapspace[][PGSIZE];
+  // extern int swap_used[];
   extern struct spinlock swaplock;
 
   for(i = 0; i < sz; i += PGSIZE){
@@ -364,29 +383,51 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent, struct
     // Handle swapped pages
     if((*pte & PTE_S)) {
       // This is a swapped page - copy from swap space
-      int parent_slot = parent->swap_index[i/PGSIZE];
-      if(parent_slot < 0 || parent_slot >= MAX_SWAP) {
-        goto err;  // Invalid swap slot
-      }
+      // int parent_slot = parent->swap_index[i/PGSIZE];
+      // if(parent_slot < 0 || parent_slot >= MAX_SWAP) {
+      //   goto err;  // Invalid swap slot
+      // }
+
+      int parent_block = parent->swap_index[i/PGSIZE];
+      int child_block = allocate_swap_block();
+
+      char *temp = kalloc();
+      if(temp == 0) goto err;
       
       // Allocate new swap slot in swap space
-      acquire(&swaplock);
-      int child_slot = -1;
-      for(int j = 0; j < MAX_SWAP; j++){
-        if(swap_used[j] == 0){
-          swap_used[j] = 1;
-          child_slot = j;
-          break;
-        }
+      // acquire(&swaplock);
+      // int child_slot = -1;
+      // for(int j = 0; j < MAX_SWAP; j++){
+      //   if(swap_used[j] == 0){
+      //     swap_used[j] = 1;
+      //     child_slot = j;
+      //     break;
+      //   }
+      // }
+      // release(&swaplock);
+      // read parent data
+      for(int k = 0; k < BLOCKS_PER_PAGE; k++){
+        struct buf *b = bread(ROOTDEV, parent_block + k);
+        memmove(temp + k*BSIZE, b->data, BSIZE);
+        brelse(b);
       }
-      release(&swaplock);
+
+      // write to child block
+      for(int k = 0; k < BLOCKS_PER_PAGE; k++){
+        struct buf *b = bread(ROOTDEV, child_block + k);
+        memmove(b->data, temp + k*BSIZE, BSIZE);
+        bwrite(b);
+        brelse(b); 
+      }
+
+      kfree(temp);
       
-      if(child_slot < 0) {
-        goto err;  // No swap space available
-      }
+      // if(child_slot < 0) {
+      //   goto err;  // No swap space available
+      // }
       
       // Copy data from parent's swap slot to child's
-      memmove(swapspace[child_slot], swapspace[parent_slot], PGSIZE);
+      // memmove(swapspace[child_slot], swapspace[parent_slot], PGSIZE);
       
       // Get the pointer to PTE in new page table
       pte_t *newpte = walk(new, i, 1);
@@ -398,7 +439,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz, struct proc *parent, struct
       *newpte &= ~PTE_V;  // Ensure valid bit is not set
       *newpte |= PTE_S;   // Ensure swapped bit is set
       
-      child->swap_index[i/PGSIZE] = child_slot;
+      child->swap_index[i/PGSIZE] = child_block;
       continue;  // Skip to next page
     }
     
@@ -591,14 +632,30 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
       }
     }
 
-    int slot = p->swap_index[va/PGSIZE];
-    memmove((void*)mem, swapspace[slot], PGSIZE);
+    // int slot = p->swap_index[va/PGSIZE];
+    // memmove((void*)mem, swapspace[slot], PGSIZE);
+
+    // p->swap_index[va/PGSIZE] = -1;
+
+    // acquire(&swaplock);
+    // swap_used[slot] = 0;
+    // release(&swaplock);
+    int block = p->swap_index[va/PGSIZE];
+
+    for(int i = 0; i < BLOCKS_PER_PAGE; i++){
+      struct buf *b = bread(ROOTDEV, block + i);
+      memmove((void*)(mem + i * BSIZE), b->data, BSIZE);
+      brelse(b);
+    }
+    // free swap block  
+    acquire(&swaplock);
+    int idx = (block - SWAP_START_BLOCK) / BLOCKS_PER_PAGE;
+    if(idx >= 0 && idx < MAX_SWAP_BLOCKS){
+      swap_bitmap[idx] = 0;
+    }
+    release(&swaplock);
 
     p->swap_index[va/PGSIZE] = -1;
-
-    acquire(&swaplock);
-    swap_used[slot] = 0;
-    release(&swaplock);
 
     *pte = PA2PTE(mem) | PTE_R | PTE_W | PTE_U | PTE_V;
     *pte &= ~PTE_S; 
@@ -783,25 +840,36 @@ void evict_page(struct frame *victim){
   }
   uint64 pa = PTE2PA(*pte);
 
-  acquire(&swaplock);
-  int slot = -1;
-  for(int i = 0; i < MAX_SWAP; i++){
-    if(swap_used[i] == 0){
-      swap_used[i] = 1;
-      slot = i;
-      break;
-    }
+  // acquire(&swaplock);
+  // int slot = -1;
+  // for(int i = 0; i < MAX_SWAP; i++){
+  //   if(swap_used[i] == 0){
+  //     swap_used[i] = 1;
+  //     slot = i;
+  //     break;
+  //   }
+  // }
+  // release(&swaplock);
+
+  // if(slot == -1)
+  //   panic("swap full");
+
+  // memmove(swapspace[slot], (void*)pa, PGSIZE);
+
+  // if(va / PGSIZE >= MAX_PROC_PAGES)
+  //   panic("evict_page: va out of swap_index range");
+  // p->swap_index[va/PGSIZE] = slot;
+
+  int block = allocate_swap_block();
+
+  for(int i = 0; i < BLOCKS_PER_PAGE; i++){
+    struct buf *b = bread(ROOTDEV, block + i);
+    memmove(b->data, (void*)(pa + i * BSIZE), BSIZE);
+    bwrite(b);
+    brelse(b);
   }
-  release(&swaplock);
-
-  if(slot == -1)
-    panic("swap full");
-
-  memmove(swapspace[slot], (void*)pa, PGSIZE);
-
-  if(va / PGSIZE >= MAX_PROC_PAGES)
-    panic("evict_page: va out of swap_index range");
-  p->swap_index[va/PGSIZE] = slot;
+  
+  p->swap_index[va/PGSIZE] = block;
 
   *pte &= ~PTE_V;   // invalidate
   *pte |= PTE_S;    // mark swapped
@@ -836,4 +904,17 @@ void update_refbit(struct proc *p, uint64 va) {
   }
 
   release(&framelock);
+}
+
+int allocate_swap_block() {
+  acquire(&swaplock);
+  for(int i = 0; i < MAX_SWAP_BLOCKS; i++){
+    if(swap_bitmap[i] == 0){
+      swap_bitmap[i] = 1;
+      release(&swaplock);
+      return SWAP_START_BLOCK + i * BLOCKS_PER_PAGE;
+    }
+  }
+  release(&swaplock);
+  panic("No swap space left on disk");
 }

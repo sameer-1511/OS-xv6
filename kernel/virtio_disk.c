@@ -15,9 +15,23 @@
 #include "fs.h"
 #include "buf.h"
 #include "virtio.h"
+#include "proc.h"
 
 // the address of virtio mmio register r.
 #define R(r) ((volatile uint32 *)(VIRTIO0 + (r)))
+
+#define RAID0 0
+#define RAID1 1
+#define RAID5 2
+
+#define NDISK 4
+
+int raid_mode = 4;   // default
+
+#define ROTATIONAL_DELAY 5
+
+static uint64 total_latency = 0;
+static uint64 total_requests = 0;
 
 static struct disk {
   // a set (not a ring) of DMA descriptors, with which the
@@ -57,6 +71,39 @@ static struct disk {
   struct spinlock vdisk_lock;
   
 } disk;
+
+//PA4
+// --- Disk scheduling queue (FCFS) ---
+#define MAX_REQ 128
+
+struct disk_req {
+  struct buf *b;
+  int write;
+  int blockno;
+  struct proc *p;
+  int valid;
+};
+
+static struct {
+  struct spinlock lock;
+  struct disk_req q[MAX_REQ];
+  int head, tail, count;
+  int busy;   // is a request currently in-flight to device?
+} dqueue;
+
+static int current_head = 0;
+int disk_policy = 0;   // 0 = FCFS, 1 = SSTF
+
+// forward declarations
+static void enqueue_req(struct buf *, int);
+static struct disk_req dequeue_req(void);
+static void start_next_req(void);
+static void virtio_disk_submit(struct buf *, int);
+static struct disk_req pick_next_req();
+
+static void raid0_map(int block, int *disk, int *offset);
+static void raid1_map(int block, int *d1, int *d2, int *offset);
+static void raid5_map(int block, int *data_disk, int *parity_disk, int *offset);
 
 void
 virtio_disk_init(void)
@@ -150,6 +197,9 @@ virtio_disk_init(void)
   *R(VIRTIO_MMIO_STATUS) = status;
 
   // plic.c and trap.c arrange for interrupts from VIRTIO0_IRQ.
+  initlock(&dqueue.lock, "dqueue");
+  dqueue.head = dqueue.tail = dqueue.count = 0;
+  dqueue.busy = 0;
 }
 
 // find a free descriptor, mark it non-free, return its index.
@@ -212,81 +262,104 @@ alloc3_desc(int *idx)
   return 0;
 }
 
+// void
+// virtio_disk_rw(struct buf *b, int write)
+// {
+//   uint64 sector = b->blockno * (BSIZE / 512);
+
+//   acquire(&disk.vdisk_lock);
+
+//   // the spec's Section 5.2 says that legacy block operations use
+//   // three descriptors: one for type/reserved/sector, one for the
+//   // data, one for a 1-byte status result.
+
+//   // allocate the three descriptors.
+//   int idx[3];
+//   while(1){
+//     if(alloc3_desc(idx) == 0) {
+//       break;
+//     }
+//     sleep(&disk.free[0], &disk.vdisk_lock);
+//   }
+
+//   // format the three descriptors.
+//   // qemu's virtio-blk.c reads them.
+
+//   struct virtio_blk_req *buf0 = &disk.ops[idx[0]];
+
+//   if(write)
+//     buf0->type = VIRTIO_BLK_T_OUT; // write the disk
+//   else
+//     buf0->type = VIRTIO_BLK_T_IN; // read the disk
+//   buf0->reserved = 0;
+//   buf0->sector = sector;
+
+//   disk.desc[idx[0]].addr = (uint64) buf0;
+//   disk.desc[idx[0]].len = sizeof(struct virtio_blk_req);
+//   disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
+//   disk.desc[idx[0]].next = idx[1];
+
+//   disk.desc[idx[1]].addr = (uint64) b->data;
+//   disk.desc[idx[1]].len = BSIZE;
+//   if(write)
+//     disk.desc[idx[1]].flags = 0; // device reads b->data
+//   else
+//     disk.desc[idx[1]].flags = VRING_DESC_F_WRITE; // device writes b->data
+//   disk.desc[idx[1]].flags |= VRING_DESC_F_NEXT;
+//   disk.desc[idx[1]].next = idx[2];
+
+//   disk.info[idx[0]].status = 0xff; // device writes 0 on success
+//   disk.desc[idx[2]].addr = (uint64) &disk.info[idx[0]].status;
+//   disk.desc[idx[2]].len = 1;
+//   disk.desc[idx[2]].flags = VRING_DESC_F_WRITE; // device writes the status
+//   disk.desc[idx[2]].next = 0;
+
+//   // record struct buf for virtio_disk_intr().
+//   b->disk = 1;
+//   disk.info[idx[0]].b = b;
+
+//   // tell the device the first index in our chain of descriptors.
+//   disk.avail->ring[disk.avail->idx % NUM] = idx[0];
+
+//   __sync_synchronize();
+
+//   // tell the device another avail ring entry is available.
+//   disk.avail->idx += 1; // not % NUM ...
+
+//   __sync_synchronize();
+
+//   *R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0; // value is queue number
+
+//   // Wait for virtio_disk_intr() to say request has finished.
+//   while(b->disk == 1) {
+//     sleep(b, &disk.vdisk_lock);
+//   }
+
+//   disk.info[idx[0]].b = 0;
+//   free_chain(idx[0]);
+
+//   release(&disk.vdisk_lock);
+// }
+
 void
 virtio_disk_rw(struct buf *b, int write)
 {
-  uint64 sector = b->blockno * (BSIZE / 512);
-
   acquire(&disk.vdisk_lock);
 
-  // the spec's Section 5.2 says that legacy block operations use
-  // three descriptors: one for type/reserved/sector, one for the
-  // data, one for a 1-byte status result.
+  b->disk = 1;  // mark as pending
 
-  // allocate the three descriptors.
-  int idx[3];
-  while(1){
-    if(alloc3_desc(idx) == 0) {
-      break;
-    }
-    sleep(&disk.free[0], &disk.vdisk_lock);
-  }
+  // enqueue request (your queue function)
+  enqueue_req(b, write);
 
-  // format the three descriptors.
-  // qemu's virtio-blk.c reads them.
+  // try to start next request
+  // acquire(&dqueue.lock);
+  // start_next_req();
+  // release(&dqueue.lock);
 
-  struct virtio_blk_req *buf0 = &disk.ops[idx[0]];
-
-  if(write)
-    buf0->type = VIRTIO_BLK_T_OUT; // write the disk
-  else
-    buf0->type = VIRTIO_BLK_T_IN; // read the disk
-  buf0->reserved = 0;
-  buf0->sector = sector;
-
-  disk.desc[idx[0]].addr = (uint64) buf0;
-  disk.desc[idx[0]].len = sizeof(struct virtio_blk_req);
-  disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
-  disk.desc[idx[0]].next = idx[1];
-
-  disk.desc[idx[1]].addr = (uint64) b->data;
-  disk.desc[idx[1]].len = BSIZE;
-  if(write)
-    disk.desc[idx[1]].flags = 0; // device reads b->data
-  else
-    disk.desc[idx[1]].flags = VRING_DESC_F_WRITE; // device writes b->data
-  disk.desc[idx[1]].flags |= VRING_DESC_F_NEXT;
-  disk.desc[idx[1]].next = idx[2];
-
-  disk.info[idx[0]].status = 0xff; // device writes 0 on success
-  disk.desc[idx[2]].addr = (uint64) &disk.info[idx[0]].status;
-  disk.desc[idx[2]].len = 1;
-  disk.desc[idx[2]].flags = VRING_DESC_F_WRITE; // device writes the status
-  disk.desc[idx[2]].next = 0;
-
-  // record struct buf for virtio_disk_intr().
-  b->disk = 1;
-  disk.info[idx[0]].b = b;
-
-  // tell the device the first index in our chain of descriptors.
-  disk.avail->ring[disk.avail->idx % NUM] = idx[0];
-
-  __sync_synchronize();
-
-  // tell the device another avail ring entry is available.
-  disk.avail->idx += 1; // not % NUM ...
-
-  __sync_synchronize();
-
-  *R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0; // value is queue number
-
-  // Wait for virtio_disk_intr() to say request has finished.
-  while(b->disk == 1) {
+  // wait for completion (unchanged behavior)
+  while(b->disk == 1){
     sleep(b, &disk.vdisk_lock);
   }
-
-  disk.info[idx[0]].b = 0;
-  free_chain(idx[0]);
 
   release(&disk.vdisk_lock);
 }
@@ -320,8 +393,245 @@ virtio_disk_intr()
     b->disk = 0;   // disk is done with buf
     wakeup(b);
 
+    free_chain(id);
+
+    acquire(&dqueue.lock);
+    dqueue.busy = 0;
+    wakeup(&dqueue);  // wakeup scheduler if waiting for request to finish
+    start_next_req();
+    release(&dqueue.lock);
+
     disk.used_idx += 1;
   }
 
   release(&disk.vdisk_lock);
 }
+
+// NEW: submit one request to device (no waiting here)
+static void
+virtio_disk_submit(struct buf *b, int write)
+{
+  int disk_id = 0;
+  int offset = b->blockno;
+
+  if(raid_mode == RAID0){
+    raid0_map(b->blockno, &disk_id, &offset);
+  }
+  else if(raid_mode == RAID1){
+    int d1, d2;
+    raid1_map(b->blockno, &d1, &d2, &offset);
+    disk_id = d1; 
+  }
+  else if(raid_mode == RAID5){
+    int parity_disk = b->blockno % NDISK;
+    raid5_map(b->blockno, &disk_id, &parity_disk, &offset);
+  }
+
+  // for now, ignore disk_id (single device simulation)
+  uint64 sector = offset * (BSIZE / 512);
+
+  // allocate 3 descriptors
+  int idx[3];
+  while(1){
+    if(alloc3_desc(idx) == 0)
+      break;
+    sleep(&disk.free[0], &disk.vdisk_lock);
+  }
+
+  // header
+  struct virtio_blk_req *buf0 = &disk.ops[idx[0]];
+  buf0->type = write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+  buf0->reserved = 0;
+  buf0->sector = sector;
+
+  // descriptor 0: header
+  disk.desc[idx[0]].addr = (uint64) buf0;
+  disk.desc[idx[0]].len = sizeof(struct virtio_blk_req);
+  disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
+  disk.desc[idx[0]].next = idx[1];
+
+  // descriptor 1: data
+  disk.desc[idx[1]].addr = (uint64) b->data;
+  disk.desc[idx[1]].len = BSIZE;
+  if(write)
+    disk.desc[idx[1]].flags = 0;
+  else
+    disk.desc[idx[1]].flags = VRING_DESC_F_WRITE;
+  disk.desc[idx[1]].flags |= VRING_DESC_F_NEXT;
+  disk.desc[idx[1]].next = idx[2];
+
+  // descriptor 2: status
+  disk.info[idx[0]].status = 0xff;
+  disk.desc[idx[2]].addr = (uint64) &disk.info[idx[0]].status;
+  disk.desc[idx[2]].len = 1;
+  disk.desc[idx[2]].flags = VRING_DESC_F_WRITE;
+  disk.desc[idx[2]].next = 0;
+
+  // remember buffer
+  disk.info[idx[0]].b = b;
+
+  // put into avail ring
+  disk.avail->ring[disk.avail->idx % NUM] = idx[0];
+
+  __sync_synchronize();
+
+  disk.avail->idx += 1;
+
+  __sync_synchronize();
+
+  *R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;
+}
+
+static void
+enqueue_req(struct buf *b, int write)
+{
+  acquire(&dqueue.lock);
+
+  while(dqueue.count == MAX_REQ){
+    sleep(&dqueue, &dqueue.lock);  // wait for space
+  }
+
+  dqueue.q[dqueue.tail].b = b;
+  dqueue.q[dqueue.tail].write = write;
+  dqueue.q[dqueue.tail].blockno = b->blockno;
+  dqueue.q[dqueue.tail].p = myproc();   // track process
+  dqueue.q[dqueue.tail].valid = 1;
+
+  dqueue.tail = (dqueue.tail + 1) % MAX_REQ;
+  dqueue.count++;
+
+  if(dqueue.busy == 0){
+    start_next_req();
+  }
+
+  wakeup(&dqueue);  // notify scheduler
+  release(&dqueue.lock);
+}
+
+static struct disk_req
+dequeue_req()
+{
+  struct disk_req r = {0};
+
+  if(dqueue.count > 0){
+    r = dqueue.q[dqueue.head];
+    dqueue.q[dqueue.head].valid = 0;
+    dqueue.head = (dqueue.head + 1) % MAX_REQ;
+    dqueue.count--;
+  }
+
+  return r;
+}
+
+static struct disk_req
+pick_next_req()
+{
+  struct disk_req best = {0};
+
+  if(dqueue.count == 0)
+    return best;
+
+  int best_idx = -1;
+  int best_dist = 0;
+
+  for(int i = 0; i < MAX_REQ; i++){
+    if(!dqueue.q[i].valid)
+      continue;
+
+    int dist = dqueue.q[i].blockno - current_head;
+    if(dist < 0) dist = -dist;
+// || (dist == best_dist && dqueue.q[i].p && (!best.p || dqueue.q[i].p->qlevel < best.p->qlevel))
+    if(best_idx == -1 || dist < best_dist ){
+      best_idx = i;
+      best_dist = dist;
+      best = dqueue.q[i];
+    }
+  }
+
+  struct disk_req r = {0};
+  
+  if(best_idx >= 0){
+    r = dqueue.q[best_idx];
+    dqueue.q[best_idx].valid = 0;
+    dqueue.q[best_idx].b = 0;   // prevent reuse bug
+    dqueue.count--;
+  }
+
+  return r;
+}
+
+static void
+start_next_req()
+{
+  if(dqueue.busy)
+    return;
+
+  if(dqueue.count == 0)
+    return;
+
+  struct disk_req r;
+
+  if(disk_policy == 0){
+    r = dequeue_req();   // FCFS
+  } else {
+    r = pick_next_req(); // SSTF
+  }
+  
+  // Check if valid request
+  if(r.b == 0)
+    return;
+
+    // Compute and accumulate latency
+  int dist = r.blockno - current_head;
+  if(dist < 0) dist = -dist;
+  int latency = dist + ROTATIONAL_DELAY;
+
+  total_latency += latency;
+  total_requests++;
+
+  // Update process stats if available
+  if(r.p) {
+    if(r.write)
+      r.p->disk_writes++;
+    else
+      r.p->disk_reads++;
+  }
+    
+  dqueue.busy = 1;
+  current_head = r.blockno;  // update head position
+
+  // submit to existing driver
+  virtio_disk_submit(r.b, r.write);
+}
+
+static void
+raid0_map(int block, int *disk, int *offset)
+{
+  *disk = block % NDISK;
+  *offset = block / NDISK;
+}
+
+static void
+raid1_map(int block, int *d1, int *d2, int *offset)
+{
+  *d1 = block % NDISK;
+  *d2 = (*d1 + 1) % NDISK;
+  *offset = block;
+}
+
+// RAID 5: parity_disk = block % NDISK
+// data is striped across the remaining (NDISK-1) disks
+static void
+raid5_map(int block, int *data_disk, int *parity_disk, int *offset)
+{
+  int stripe = block / (NDISK - 1);   // which stripe row
+  int pos    = block % (NDISK - 1);   // position within stripe
+
+  *parity_disk = stripe % NDISK;      // rotating parity disk
+  // shift data disk past the parity disk
+  *data_disk = pos < *parity_disk ? pos : pos + 1;
+  *offset = stripe;
+}
+
+uint64 get_total_latency(void)  { return total_latency; }
+uint64 get_total_requests(void) { return total_requests; }

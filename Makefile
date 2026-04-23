@@ -156,13 +156,22 @@ UPROGS=\
 	$U/_test_pager\
 	$U/_test_scheduler\
 	$U/_test_swapnr\
+	$U/_test_jd\
+	$U/_t37\
+	$U/_setdisksched\
+	$U/_t4_1\
+	$U/_t4_2\
+	$U/_t4swap\
+	$U/_t4sched\
+	$U/_t4raid\
+	$U/_t4stats\
+	$U/_t4all\
 # 	$U/_t31\
 # 	$U/_t32\
 # 	$U/_t33\
 # 	$U/_t34\
 # 	$U/_t35\
 # 	$U/_t36\
-# 	$U/_t37\
 # 	$U/_mtest_hello\
 # 	$U/_mtest_getpid2\
 # 	$U/_mtest_getppid\
